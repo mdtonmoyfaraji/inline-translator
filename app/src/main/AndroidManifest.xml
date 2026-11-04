@@ -4,13 +4,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:allowBackup="true"
-        android:icon="@android:drawable/sym_def_app_icon"
-        android:label="Inline Translator"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
-        <!-- Settings Activity -->
+        <!-- Settings -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -20,10 +21,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Inline Translate Hook (Triggered from any text selection) -->
+        <!-- Select text in any app -> menu -> "Inline Translator" -->
         <activity
             android:name=".ProcessTextActivity"
-            android:label="Inline AI Translate"
+            android:label="@string/process_text_label"
+            android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:exported="true">
             <intent-filter>
@@ -32,6 +34,20 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <!-- Floating translate button above the keyboard + insert at cursor -->
+        <service
+            android:name=".TranslatorService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
 
     </application>
 </manifest>

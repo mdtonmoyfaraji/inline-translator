@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Inline Translator</string>
+    <string name="process_text_label">Inline Translator</string>
+    <string name="a11y_description">Shows a translate button above the keyboard in text fields. After you type in the panel and press the arrow, the translation is inserted at your cursor. Only the text you type in the panel is sent, to the AI provider you configured.</string>
+</resources>
