@@ -9,6 +9,9 @@ object Languages {
     const val AUTO = "auto"
     const val CUSTOM_PREFIX = "custom:"
 
+    /** Target meaning "do not translate, only apply the tone". */
+    const val NONE = "none"
+
     val ALL: List<Language> = listOf(
         Language("af", "Afrikaans", "Afrikaans"),
         Language("sq", "Albanian", "Shqip"),
@@ -130,6 +133,7 @@ object Languages {
     /** English display name (this is also what is sent to the model). */
     fun name(code: String): String = when {
         code == AUTO -> "Detect language"
+        code == NONE -> "No translation"
         code.startsWith(CUSTOM_PREFIX) -> code.removePrefix(CUSTOM_PREFIX)
         else -> find(code)?.name ?: code
     }
