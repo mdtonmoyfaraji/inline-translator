@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -49,7 +50,20 @@ class TranslatorService : AccessibilityService() {
     private var panelView: View? = null
     private var panelLp: WindowManager.LayoutParams? = null
     private var panel: TranslatorPanel? = null
-    private var mirrorActive = false
+    private var mirrorActive = false // true in "relay" and "field" mode: the panel never owns the keyboard
+    private var typingMode = "box"
+    private var panelFocusable = false
+    // relay mode
+    private var relayBase: String? = null
+    private var relayLo = 0
+    private var relayHi = 0
+    private var relayTouched = false
+    private var relayDelivered = false
+    private var relayDegraded = false
+    private var awaitingRevert = false
+    private var lastFieldText = ""
+    private val boxText = StringBuilder()
+    private val imeCheckTask = Runnable { checkImeStillThere() }
     private var target: AccessibilityNodeInfo? = null
     private var hidePending = false
     private var ignoreEventsUntil = 0L
@@ -124,14 +138,117 @@ class TranslatorService : AccessibilityService() {
                 target = if (n != null && n.isEditable && !n.isPassword) n else null
                 scheduleRefresh(120)
             }
-            else -> if (panelView == null) scheduleRefresh(120)
+            else -> {
+                if (panelView == null) {
+                    scheduleRefresh(120)
+                } else if (mirrorActive && !panelFocusable) {
+                    // Keyboard went away (Back, other app ...): the panel has nothing to work with any more.
+                    main.removeCallbacks(imeCheckTask)
+                    main.postDelayed(imeCheckTask, 700)
+                }
+            }
         }
+    }
+
+    /**
+     * Relay mode: the keyboard types into the app's field (so it is never touched). Every typed change is moved
+     * into the panel's box and the field is put back to what it was.
+     */
+    private fun relayEvent(event: AccessibilityEvent, after: String) {
+        val base = relayBase ?: return
+        val before = event.beforeText?.toString() ?: lastFieldText
+        lastFieldText = after
+        if (awaitingRevert && after == base) { // that was our own "put it back"
+            awaitingRevert = false
+            return
+        }
+        if (after == before) return
+        relayTouched = true
+        TextDiff.applyToBox(boxText, TextDiff.between(before, after))
+        panel?.setMirrorText(boxText.toString())
+        revertField()
+    }
+
+    /** Puts the app's field back to its original text and cursor. */
+    private fun revertField() {
+        val node = target ?: return
+        val base = relayBase ?: return
+        try {
+            if (!node.refresh()) return
+            val args = Bundle()
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, base)
+            awaitingRevert = true
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                setCursor(node, relayLo, relayHi)
+            } else {
+                // This app does not allow it: fall back to "field" behavior (box mirrors the whole field).
+                awaitingRevert = false
+                relayDegraded = true
+                panel?.setMirrorText(fieldTextOf(node))
+            }
+        } catch (e: Exception) {
+            awaitingRevert = false
+        }
+    }
+
+    private fun relayDeliver(text: String): Boolean {
+        val node = target ?: return false
+        val base = relayBase ?: return false
+        try {
+            if (!node.refresh()) return false
+        } catch (e: Exception) {
+            return false
+        }
+        if (!node.isEditable) return false
+        val lo = relayLo.coerceIn(0, base.length)
+        val hi = relayHi.coerceIn(lo, base.length)
+        val ok = writeText(node, base.substring(0, lo) + text + base.substring(hi), lo + text.length, text, lo, hi)
+        if (ok) relayDelivered = true
+        return ok
+    }
+
+    private fun checkImeStillThere() {
+        if (panelView != null && mirrorActive && !panelFocusable && !imeVisible()) closePanel()
+    }
+
+    private fun imeBounds(): Rect? {
+        return try {
+            val w = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD } ?: return null
+            val r = Rect()
+            w.getBoundsInScreen(r)
+            r
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** A tap outside the panel: close it, unless it was a tap on the keyboard (or, in field mode, on the field itself). */
+    private fun handleOutsideTouch(e: MotionEvent, mirror: Boolean) {
+        val lp = panelLp ?: return
+        // Window-relative and raw coordinates: use both so a tap on the keyboard is never mistaken for "outside".
+        val pts = listOf(
+            Point((lp.x + e.x).toInt(), (lp.y + e.y).toInt()),
+            Point(e.rawX.toInt(), e.rawY.toInt())
+        )
+        val ime = imeBounds()
+        if (ime != null && pts.any { ime.contains(it.x, it.y) }) return
+        if (mirror) {
+            val n = target
+            if (n != null) {
+                val r = Rect()
+                try {
+                    n.getBoundsInScreen(r)
+                } catch (ex: Exception) {
+                }
+                if (!r.isEmpty && pts.any { r.contains(it.x, it.y) }) return
+            }
+        }
+        closePanel()
     }
 
     private fun handleTextChanged(event: AccessibilityEvent) {
         if (event.isPassword) return
         val now = SystemClock.uptimeMillis()
-        if (now < ignoreEventsUntil) return
         if (event.packageName?.toString() == packageName && ProcessTextActivity.active) return
 
         if (panelView != null) {
@@ -139,12 +256,14 @@ class TranslatorService : AccessibilityService() {
             if (mirrorActive) {
                 val src = event.source
                 if (src != null && src == target) {
-                    panel?.setMirrorText(event.text?.firstOrNull()?.toString() ?: "")
+                    val after = event.text?.firstOrNull()?.toString() ?: ""
+                    if (typingMode == "relay" && !relayDegraded) relayEvent(event, after) else panel?.setMirrorText(after)
                 }
             }
             return
         }
 
+        if (now < ignoreEventsUntil) return // our own edit that removed the trigger characters
         val cfg = detector.cfg
         if (!cfg.enabled) return
         val before = event.beforeText?.toString() ?: return
@@ -389,7 +508,8 @@ class TranslatorService : AccessibilityService() {
         val manager = wm ?: return
         if (panelView != null) return
         val node = currentTarget() ?: return
-        val mirror = p.typingMode == "field"
+        val mode = p.typingMode
+        val mirror = mode != "box"
         val selection = selectedTextOf(node)
         val fieldText = fieldTextOf(node)
         hideBubble()
@@ -398,7 +518,11 @@ class TranslatorService : AccessibilityService() {
         var dragStartY = 0
         val host = object : TranslatorPanel.Host {
             override fun deliver(text: String): Boolean {
-                val ok = if (mirror) replaceAllText(text) else insertIntoTarget(text)
+                val ok = when {
+                    mode == "relay" && !relayDegraded -> relayDeliver(text)
+                    mirror -> replaceAllText(text)
+                    else -> insertIntoTarget(text)
+                }
                 if (ok) main.post { closePanel() }
                 return ok
             }
@@ -416,6 +540,13 @@ class TranslatorService : AccessibilityService() {
 
             override val draggable: Boolean get() = true
             override val mirrorMode: Boolean get() = mirror
+
+            override val typingHint: String
+                get() = if (mode == "relay") {
+                    "Type with your keyboard. It shows up here. Tap \u2191 to translate."
+                } else {
+                    "Keep typing in the message field. It shows up here. Tap \u2191 to translate."
+                }
 
             override fun dragStart() {
                 val lp = panelLp ?: return
@@ -445,6 +576,7 @@ class TranslatorService : AccessibilityService() {
             }
 
             override fun setFocusable(focusable: Boolean) {
+                panelFocusable = focusable
                 val lp = panelLp ?: return
                 val v = panelView ?: return
                 lp.flags = if (focusable) {
@@ -464,6 +596,7 @@ class TranslatorService : AccessibilityService() {
         // keyboard state alone. Field mode: the panel is not focusable at all, so the keyboard is never touched.
         var flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         if (mirror) flags = flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        if (p.closeOutside) flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -504,9 +637,31 @@ class TranslatorService : AccessibilityService() {
         panelView = tp.view
         panelLp = lp
         mirrorActive = mirror
+        typingMode = mode
+        panelFocusable = !mirror
+        relayBase = null
+        relayTouched = false
+        relayDelivered = false
+        relayDegraded = false
+        awaitingRevert = false
+        boxText.setLength(0)
+        if (p.closeOutside) tp.view.onOutside = { ev -> handleOutsideTouch(ev, mirror) }
         if (mirror) {
             applyServiceInfo() // start listening to text changes of the field
-            tp.setMirrorText(fieldText)
+            if (mode == "relay") {
+                initRelay(node)
+                tp.setMirrorText(boxText.toString())
+                // The trigger characters were just removed; re-read the field once if nothing was typed yet.
+                main.postDelayed({
+                    if (panelView != null && typingMode == "relay" && !relayTouched) {
+                        initRelay(node)
+                        panel?.setMirrorText(boxText.toString())
+                    }
+                }, 300)
+            } else {
+                tp.setMirrorText(fieldText)
+                main.postDelayed({ if (panelView != null && mirrorActive) panel?.setMirrorText(fieldTextOf(node)) }, 300)
+            }
         } else {
             if (selection.isNotEmpty()) tp.prefill(selection, autoSubmit = false)
             // Only ask for the keyboard if it is not already up; asking again is what makes it flicker.
@@ -514,7 +669,25 @@ class TranslatorService : AccessibilityService() {
         }
     }
 
+    private fun initRelay(node: AccessibilityNodeInfo) {
+        val base = fieldTextOf(node)
+        relayBase = base
+        lastFieldText = base
+        var s = node.textSelectionStart
+        var e = node.textSelectionEnd
+        if (node.isShowingHintText || s < 0 || e < 0) {
+            s = base.length
+            e = base.length
+        }
+        relayLo = minOf(s, e).coerceIn(0, base.length)
+        relayHi = maxOf(s, e).coerceIn(relayLo, base.length)
+        boxText.setLength(0)
+        if (relayHi > relayLo) boxText.append(base.substring(relayLo, relayHi)) // selected text goes into the box
+    }
+
     private fun closePanel(refresh: Boolean = true) {
+        // Closing without sending: make sure the field is exactly as it was.
+        if (panelView != null && typingMode == "relay" && !relayDelivered && !relayDegraded && relayTouched) revertField()
         panel?.dispose()
         panel = null
         val v = panelView
@@ -526,6 +699,8 @@ class TranslatorService : AccessibilityService() {
             } catch (e: Exception) {
             }
         }
+        main.removeCallbacks(imeCheckTask)
+        panelFocusable = false
         if (mirrorActive) {
             mirrorActive = false
             applyServiceInfo()

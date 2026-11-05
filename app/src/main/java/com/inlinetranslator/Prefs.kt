@@ -105,10 +105,20 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("bubble_enabled", true)
         set(v) { sp.edit().putBoolean("bubble_enabled", v).apply() }
 
-    /** "box" = type inside the panel, "field" = type in the app's own field (keyboard is never touched). */
+    /**
+     * "relay" (default) = you type in the panel box, the keyboard stays bound to the app's field and is never touched;
+     *                      typed characters are picked up and the field is put back at once.
+     * "field" = you keep typing in the app's own field; the panel shows that text live and the keyboard is never touched.
+     * "box" = the panel window takes the keyboard (Android then switches it and may hide it for a moment).
+     */
     var typingMode: String
-        get() = sp.getString("typing_mode", "box") ?: "box"
-        set(v) { sp.edit().putString("typing_mode", if (v == "field") "field" else "box").apply() }
+        get() = sp.getString("typing_mode3", "relay") ?: "relay"
+        set(v) { sp.edit().putString("typing_mode3", if (v == "box" || v == "field") v else "relay").apply() }
+
+    /** Tapping outside the panel closes it (the keyboard stays). */
+    var closeOutside: Boolean
+        get() = sp.getBoolean("close_outside", true)
+        set(v) { sp.edit().putBoolean("close_outside", v).apply() }
 
     /** Position as a fraction (0..1) of the free screen area, so it survives rotation. Null = default. */
     fun bubblePos(): Pair<Float, Float>? = readPos("bubble")

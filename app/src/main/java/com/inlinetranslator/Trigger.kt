@@ -135,3 +135,23 @@ class TriggerDetector(var cfg: TriggerConfig) {
         return Hit.PROGRESS
     }
 }
+
+/** One contiguous edit between two texts: [removed] characters were replaced by [inserted]. */
+class TextEdit(val removed: Int, val inserted: String)
+
+object TextDiff {
+    fun between(before: String, after: String): TextEdit {
+        val max = minOf(before.length, after.length)
+        var p = 0
+        while (p < max && before[p] == after[p]) p++
+        var s = 0
+        while (s < max - p && before[before.length - 1 - s] == after[after.length - 1 - s]) s++
+        return TextEdit(before.length - p - s, after.substring(p, after.length - s))
+    }
+
+    /** Applies an edit that happened in a field to the panel's own box text (typing/backspace at the end). */
+    fun applyToBox(box: StringBuilder, e: TextEdit) {
+        if (e.removed > 0) box.setLength((box.length - e.removed).coerceAtLeast(0))
+        if (e.inserted.isNotEmpty()) box.append(e.inserted)
+    }
+}

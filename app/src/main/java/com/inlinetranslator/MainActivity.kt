@@ -756,10 +756,22 @@ class MainActivity : Activity() {
         }
         add(col, reset, 10)
 
+        add(col, toggleRow("Close the panel when I tap outside of it", prefs.closeOutside) {
+            prefs.closeOutside = it
+        }, 6)
+        add(
+            col,
+            tv(this, "Taps on the keyboard (and, in the recommended typing mode, on the text field) never close it. The keyboard stays open.", 12f, pal.muted),
+            0
+        )
+
         add(col, tv(this, "Typing", 13f, pal.fg, bold = true), 18)
-        val modeRow = LinearLayout(this)
-        modeRow.orientation = LinearLayout.HORIZONTAL
-        listOf("box" to "In the panel box", "field" to "In the app\u2019s own field").forEachIndexed { i, (id, label) ->
+        val modes = listOf(
+            Triple("relay", "Type in the box, keyboard stays", "Recommended. You type in the panel\u2019s box and the keyboard is never touched, not even for a moment: it stays attached to your message field, every letter is picked up into the box and the field is put back at once (the field may flash for a moment). Needs an app that allows text editing by accessibility; otherwise it falls back to the next mode. No auto-correct while typing in this mode. Don\u2019t press the keyboard\u2019s send/enter button: it would send the field\u2019s old text."),
+            Triple("field", "Type in the field, box mirrors it", "You keep typing in your message field, the box shows that text live. The arrow replaces the whole field text with the result. The keyboard is never touched either."),
+            Triple("box", "Type in the box, Android switches keyboard", "The panel takes the keyboard. Android then hides the keyboard for a moment while it moves it to the panel. This can\u2019t be avoided in this mode.")
+        )
+        for ((id, label, _) in modes) {
             val b = button(label, prefs.typingMode == id)
             b.setOnClickListener {
                 if (prefs.typingMode != id) {
@@ -768,25 +780,9 @@ class MainActivity : Activity() {
                     recreate()
                 }
             }
-            modeRow.addView(
-                b,
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) leftMargin = dp(8) }
-            )
+            add(col, b, 6)
         }
-        add(col, modeRow, 6)
-        add(
-            col,
-            tv(
-                this,
-                if (prefs.typingMode == "field") {
-                    "In the app\u2019s own field: you keep typing in the normal text field, the panel only shows that text and never takes the keyboard. The arrow replaces the whole field text with the result."
-                } else {
-                    "In the panel box: you type in the panel\u2019s own box; the result is inserted at the cursor of the original field. If your keyboard flickers when the panel opens, switch to \u201CIn the app\u2019s own field\u201D."
-                },
-                12f, pal.muted
-            ),
-            6
-        )
+        add(col, tv(this, modes.first { it.first == prefs.typingMode }.third, 12f, pal.muted), 8)
 
         add(
             col,

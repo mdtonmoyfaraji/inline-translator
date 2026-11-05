@@ -26,6 +26,17 @@ import android.widget.Toast
 
 /** Root view of the panel. Handles Back/Escape. */
 class PanelFrame(c: Context, private val onBack: () -> Boolean) : FrameLayout(c) {
+    /** Called for touches that land outside the panel window (needs FLAG_WATCH_OUTSIDE_TOUCH). */
+    var onOutside: ((MotionEvent) -> Unit)? = null
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_OUTSIDE) {
+            onOutside?.invoke(ev)
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_UP &&
             (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_ESCAPE)
@@ -60,8 +71,11 @@ class TranslatorPanel(
         /** True if the panel can be moved by dragging its top bar. */
         val draggable: Boolean get() = false
 
-        /** True = the user types in the app's own field; the panel only mirrors it and never takes the keyboard. */
+        /** True = the panel never owns the keyboard; the host feeds it the text via [setMirrorText]. */
         val mirrorMode: Boolean get() = false
+
+        /** Hint shown in the empty text box while [mirrorMode] is on. */
+        val typingHint: String get() = "Type with your keyboard. It shows up here. Tap \u2191 to translate."
 
         fun dragStart() {}
         fun dragBy(dx: Int, dy: Int) {}
@@ -76,6 +90,9 @@ class TranslatorPanel(
     private var busy = false
     private var closed = false
     private var pickerOpen = false
+    private var openKind = ""
+    private var mirrorText = ""
+    private var searchHasFocus = false
     private var savedStatusVis = View.GONE
     private var savedResultVis = View.GONE
 
@@ -272,8 +289,12 @@ class TranslatorPanel(
 
     /** Mirror mode: show what the user is typing in the app's own field. */
     fun setMirrorText(text: String) {
-        if (input.text.toString() != text) input.setText(text)
+        mirrorText = text
+        val shown = if (text.isEmpty()) "" else text + "\u258F" // thin caret at the end
+        if (input.text.toString() != shown) input.setText(shown)
     }
+
+    private fun currentText(): String = if (host.mirrorMode) mirrorText else input.text.toString()
 
     fun showKeyboard() {
         input.requestFocus()
@@ -328,7 +349,7 @@ class TranslatorPanel(
         input.hint = if (prefs.apiConfig() == null) {
             "Set up your AI connection to translate."
         } else if (host.mirrorMode) {
-            "Type in the text field. It appears here."
+            host.typingHint
         } else if (toneOnly) {
             "Type text to rewrite in the chosen tone\u2026"
         } else {
@@ -347,8 +368,15 @@ class TranslatorPanel(
     }
 
     private fun openPicker(kind: String) {
+        // Tapping the same button again closes the dropdown; tapping another one switches to it.
+        if (pickerOpen && openKind == kind) {
+            closePicker()
+            return
+        }
         closePicker()
         pickerOpen = true
+        openKind = kind
+        searchHasFocus = false
         savedStatusVis = statusRow.visibility
         savedResultVis = resultScroll.visibility
         val model = if (kind == "tone") toneModel(prefs) else languageModel(prefs, kind)
@@ -365,25 +393,35 @@ class TranslatorPanel(
             }
             closePicker()
             refreshLabels()
-        }, { closePicker() })
+        }, { closePicker() }, if (host.mirrorMode) ({
+            searchHasFocus = true
+            host.setFocusable(true) // only now does the panel take the keyboard, because you tapped the search box
+        }) else null)
         pickerHolder.removeAllViews()
         pickerHolder.addView(pane, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         pickerHolder.visibility = View.VISIBLE
         fieldBox.visibility = View.GONE
         statusRow.visibility = View.GONE
         resultScroll.visibility = View.GONE
-        if (host.mirrorMode) host.setFocusable(true) // the search box needs the keyboard
     }
 
     private fun closePicker() {
         if (!pickerOpen) return
         pickerOpen = false
+        openKind = ""
         pickerHolder.removeAllViews()
         pickerHolder.visibility = View.GONE
         fieldBox.visibility = View.VISIBLE
         statusRow.visibility = savedStatusVis
         resultScroll.visibility = savedResultVis
-        if (host.mirrorMode) host.setFocusable(false) else input.requestFocus()
+        if (host.mirrorMode) {
+            if (searchHasFocus) {
+                searchHasFocus = false
+                host.setFocusable(false)
+            }
+        } else {
+            input.requestFocus()
+        }
     }
 
     private fun onBack(): Boolean {
@@ -460,7 +498,7 @@ class TranslatorPanel(
             showNotice("\u201CNo translation\u201D needs a tone. Choose a tone, or pick a target language.", null, null, true)
             return
         }
-        val text = input.text.toString().trim()
+        val text = currentText().trim()
         if (text.isEmpty()) {
             if (!host.mirrorMode) input.requestFocus()
             return

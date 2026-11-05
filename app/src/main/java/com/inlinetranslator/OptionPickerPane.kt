@@ -85,7 +85,9 @@ class OptionPickerPane(
     private val model: PickerModel,
     private val current: String,
     private val onPick: (String) -> Unit,
-    private val onCancel: () -> Unit
+    private val onCancel: () -> Unit,
+    /** If set, the search box does not take the keyboard until it is tapped (then this is called first). */
+    private val onSearchFocus: (() -> Unit)? = null
 ) : LinearLayout(c) {
 
     private val search = EditText(c)
@@ -126,7 +128,23 @@ class OptionPickerPane(
         )
 
         render("")
-        search.post { search.requestFocus() }
+        if (onSearchFocus == null) {
+            search.post { search.requestFocus() }
+        } else {
+            // Keyboard stays exactly as it is until you tap the search box.
+            search.isFocusable = false
+            search.isFocusableInTouchMode = false
+            search.isCursorVisible = false
+            search.setOnClickListener {
+                onSearchFocus.invoke()
+                search.isFocusable = true
+                search.isFocusableInTouchMode = true
+                search.isCursorVisible = true
+                search.requestFocus()
+                context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    ?.showSoftInput(search, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
     }
 
     private fun header(title: String) {
