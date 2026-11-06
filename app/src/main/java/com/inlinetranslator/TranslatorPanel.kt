@@ -127,7 +127,7 @@ class TranslatorPanel(
             val grip = View(ctx)
             grip.background = shape(ctx, pal.muted, 3f)
             grip.alpha = 0.55f
-            handleRow.addView(grip, FrameLayout.LayoutParams(ctx.dp(40), ctx.dp(5), Gravity.CENTER))
+            handleRow.addView(grip, FrameLayout.LayoutParams(ctx.dp(40), ctx.dp(4), Gravity.CENTER))
             handleRow.contentDescription = "Drag to move"
             var downX = 0f
             var downY = 0f
@@ -155,8 +155,9 @@ class TranslatorPanel(
         styleIcon(closeBtn, "\u2715")
         closeBtn.contentDescription = "Close"
         closeBtn.setOnClickListener { host.close() }
-        handleRow.addView(closeBtn, FrameLayout.LayoutParams(ctx.dp(36), ctx.dp(30), Gravity.END or Gravity.CENTER_VERTICAL))
-        card.addView(handleRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(30)))
+        closeBtn.textSize = 12f
+        handleRow.addView(closeBtn, FrameLayout.LayoutParams(ctx.dp(34), ctx.dp(20), Gravity.END or Gravity.CENTER_VERTICAL))
+        card.addView(handleRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(20)))
 
         // --- language + tone bar ---------------------------------------------
         val bar = LinearLayout(ctx)

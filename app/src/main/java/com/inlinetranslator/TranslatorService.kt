@@ -779,9 +779,22 @@ class TranslatorService : AccessibilityService() {
 
     // ---- reading / writing the target field ---------------------------------------------------------------
 
+    /** The text is the placeholder/hint ("Nachricht", "Message" ...), not something the user wrote. */
+    private fun isPlaceholder(node: AccessibilityNodeInfo, raw: String): Boolean {
+        return try {
+            if (node.isShowingHintText) return true
+            val hint = node.hintText?.toString()
+            !hint.isNullOrEmpty() && raw == hint
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Field text with placeholders removed. */
     private fun fieldTextOf(node: AccessibilityNodeInfo): String {
         return try {
-            if (node.isShowingHintText) "" else (node.text?.toString() ?: "")
+            val raw = node.text?.toString() ?: ""
+            if (isPlaceholder(node, raw)) "" else raw
         } catch (e: Exception) {
             ""
         }
@@ -789,8 +802,8 @@ class TranslatorService : AccessibilityService() {
 
     private fun selectedTextOf(node: AccessibilityNodeInfo): String {
         return try {
-            if (node.isShowingHintText) return ""
             val t = node.text?.toString() ?: return ""
+            if (isPlaceholder(node, t)) return ""
             val s = node.textSelectionStart
             val e = node.textSelectionEnd
             if (s in 0 until e && e <= t.length) t.substring(s, e) else ""
@@ -816,18 +829,26 @@ class TranslatorService : AccessibilityService() {
         }
         if (!node.isEditable) return false
 
+        val raw = try { node.text?.toString() ?: "" } catch (e: Exception) { "" }
         val base = fieldTextOf(node)
         var start = node.textSelectionStart
         var end = node.textSelectionEnd
-        if (node.isShowingHintText || start < 0 || end < 0) {
-            start = base.length
-            end = base.length
-        }
+
         // Text was selected when the panel opened: the result replaces exactly that text.
         val cb = capBase
         if (cb != null && cb == base && capHi > capLo) {
-            start = capLo
-            end = capHi
+            return writeText(node, base.substring(0, capLo) + text + base.substring(capHi), capLo + text.length, text, capLo, capHi)
+        }
+
+        // Some apps report their placeholder ("Nachricht") as the field's text and do not say so. If the cursor
+        // info looks like "empty field with a hint", do not rebuild the text from what the app reports:
+        // insert at the cursor instead, so the placeholder can never end up in the result.
+        val unsure = raw.isNotEmpty() && !isPlaceholder(node, raw) && ((start == 0 && end == 0) || start < 0 || end < 0)
+        if (unsure) return insertViaPaste(node, text, start, end)
+
+        if (start < 0 || end < 0) {
+            start = base.length
+            end = base.length
         }
         val lo = minOf(start, end).coerceIn(0, base.length)
         val hi = maxOf(start, end).coerceIn(0, base.length)
@@ -862,7 +883,8 @@ class TranslatorService : AccessibilityService() {
     private fun insertViaPaste(node: AccessibilityNodeInfo, text: String, lo: Int, hi: Int): Boolean {
         val cm = getSystemService(ClipboardManager::class.java) ?: return false
         cm.setPrimaryClip(ClipData.newPlainText("translation", text))
-        setCursor(node, lo, hi)
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        if (lo >= 0 && hi >= 0) setCursor(node, lo, hi)
         return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
     }
 }
