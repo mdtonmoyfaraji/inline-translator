@@ -204,6 +204,16 @@ class TranslatorPanel(
                 false
             }
         }
+        if (!host.mirrorMode) {
+            // After a result was inserted the panel may have given the keyboard back to the app; tapping the box takes it again.
+            input.setOnTouchListener { _, e ->
+                if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+                    host.setFocusable(true)
+                    main.postDelayed({ showKeyboard() }, 80)
+                }
+                false
+            }
+        }
         if (host.mirrorMode) {
             // The user types in the app's own field; this box only shows that text. It never takes focus,
             // so the on-screen keyboard is not touched at all.
@@ -300,6 +310,12 @@ class TranslatorPanel(
     fun showKeyboard() {
         input.requestFocus()
         ctx.getSystemService(InputMethodManager::class.java)?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    /** The host could not insert the result after all (it reported success earlier): show it with Copy. */
+    fun notifyDeliveryFailed(text: String) {
+        if (closed) return
+        showResult(text, host.fallbackNote())
     }
 
     /** Called by the host when the panel is removed, so late network results are dropped. */

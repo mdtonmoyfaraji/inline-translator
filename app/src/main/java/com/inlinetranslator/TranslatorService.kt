@@ -1,6 +1,8 @@
 package com.inlinetranslator
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.InputMethod
+import android.view.inputmethod.EditorInfo
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -66,6 +68,10 @@ class TranslatorService : AccessibilityService() {
     // selected text support
     private var lastSelStart = -1
     private var lastSelEnd = -1
+    private var lastSelNode: AccessibilityNodeInfo? = null
+    // typed-like insertion (Android 13+)
+    private var pendingCommit: String? = null
+    private val commitTimeoutTask = Runnable { commitTimedOut() }
     private var selSaved: Triple<String, Int, Int>? = null
     private var selSavedTime = 0L
     private var forcedSel: Triple<String, Int, Int>? = null
@@ -90,6 +96,67 @@ class TranslatorService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    /** Android 13+: lets the service insert text exactly like a keyboard does (no clipboard, no placeholder issues). */
+    override fun onCreateInputMethod(): InputMethod {
+        return object : InputMethod(this) {
+            override fun onStartInput(attribute: EditorInfo, restarting: Boolean) {
+                // The app's own field is attached again (not our panel): now the pending result can be typed in.
+                if (pendingCommit != null && attribute.packageName != packageName) {
+                    main.postDelayed({ commitPending() }, 40)
+                }
+            }
+        }
+    }
+
+    private fun commitPending() {
+        val text = pendingCommit ?: return
+        val ic = try { inputMethod?.currentInputConnection } catch (e: Throwable) { null } ?: return
+        pendingCommit = null
+        main.removeCallbacks(commitTimeoutTask)
+        // If text was selected when the panel opened, make sure that selection is what gets replaced.
+        val node = target
+        val cb = capBase
+        if (node != null && cb != null && capHi > capLo) {
+            try {
+                if (node.refresh() && (node.text?.toString() ?: "") == cb) setCursor(node, capLo, capHi)
+            } catch (e: Exception) {
+            }
+        }
+        try {
+            ic.commitText(text, 1, null)
+        } catch (e: Throwable) {
+            // fall back to paste
+            if (!insertIntoTarget(text)) panel?.notifyDeliveryFailed(text)
+        }
+        if (!(prefs?.showResult ?: true)) main.post { closePanel() }
+    }
+
+    private fun commitTimedOut() {
+        val text = pendingCommit ?: return
+        pendingCommit = null
+        if (!insertIntoTarget(text)) panel?.notifyDeliveryFailed(text)
+        if (!(prefs?.showResult ?: true)) main.post { closePanel() }
+    }
+
+    /** Gives the keyboard back to the app's field, then types the result in as soon as that field is attached. */
+    private fun startTypedInsert(text: String): Boolean {
+        val im = try { inputMethod } catch (e: Throwable) { null } ?: return false
+        pendingCommit = text
+        val lp = panelLp
+        val v = panelView
+        if (lp != null && v != null) {
+            panelFocusable = false
+            lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            try {
+                wm?.updateViewLayout(v, lp)
+            } catch (e: Exception) {
+            }
+        }
+        main.removeCallbacks(commitTimeoutTask)
+        main.postDelayed(commitTimeoutTask, 1500)
+        return true
+    }
 
     override fun onUnbind(intent: Intent?): Boolean {
         cleanup()
@@ -128,7 +195,7 @@ class TranslatorService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         if (wantText) types = types or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-        if (triggerOn) types = types or AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+        types = types or AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED // lets us know about REAL user selections
         info.eventTypes = types
         info.notificationTimeout = if (wantText) 0 else 100 // no throttling, or fast double presses get lost
         serviceInfo = info
@@ -145,6 +212,7 @@ class TranslatorService : AccessibilityService() {
                 if (panelView == null) {
                     lastSelStart = event.fromIndex
                     lastSelEnd = event.toIndex
+                    lastSelNode = event.source
                 }
             }
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
@@ -152,6 +220,9 @@ class TranslatorService : AccessibilityService() {
                 if (event.packageName?.toString() == packageName && ProcessTextActivity.active) return
                 val n = event.source
                 target = if (n != null && n.isEditable && !n.isPassword) n else null
+                lastSelStart = -1
+                lastSelEnd = -1
+                lastSelNode = null
                 scheduleRefresh(120)
             }
             else -> {
@@ -566,9 +637,18 @@ class TranslatorService : AccessibilityService() {
         if (forced != null) {
             selLo = forced.second
             selHi = forced.third
-        } else if (!node.isShowingHintText) {
-            selLo = minOf(node.textSelectionStart, node.textSelectionEnd)
-            selHi = maxOf(node.textSelectionStart, node.textSelectionEnd)
+        } else {
+            // Only a selection the user really made counts (the app told us about it with a selection event and the
+            // field still reports the same range). Placeholder text can never be "selected" this way.
+            val ln = lastSelNode
+            val s = lastSelStart
+            val e = lastSelEnd
+            if (ln != null && ln == node && e > s && s >= 0 &&
+                node.textSelectionStart == s && node.textSelectionEnd == e
+            ) {
+                selLo = s
+                selHi = e
+            }
         }
         val hasSel = selLo >= 0 && selHi > selLo && selHi <= fieldText.length
         val selection = if (hasSel) fieldText.substring(selLo, selHi) else ""
@@ -581,6 +661,7 @@ class TranslatorService : AccessibilityService() {
         var dragStartY = 0
         val host = object : TranslatorPanel.Host {
             override fun deliver(text: String): Boolean {
+                if (!mirror && Build.VERSION.SDK_INT >= 33 && startTypedInsert(text)) return true
                 val ok = when {
                     mode == "relay" && !relayDegraded -> relayDeliver(text)
                     mirror -> replaceAllText(text)
@@ -768,6 +849,8 @@ class TranslatorService : AccessibilityService() {
             }
         }
         main.removeCallbacks(imeCheckTask)
+        main.removeCallbacks(commitTimeoutTask)
+        pendingCommit = null
         capBase = null
         panelFocusable = false
         if (mirrorActive) {
@@ -852,11 +935,8 @@ class TranslatorService : AccessibilityService() {
         }
         if (insertViaPaste(node, text, lo, hi)) return true
 
-        // Paste refused. Rebuilding the text is only safe when the app clearly reports real text.
+        // Paste refused: only an empty field can be filled safely without knowing its real text.
         if (raw.isEmpty()) return writeText(node, text, text.length, text, 0, 0)
-        if (lo > 0 && hi > 0 && hi <= raw.length && !isPlaceholder(node, raw)) {
-            return writeText(node, raw.substring(0, lo) + text + raw.substring(hi), lo + text.length, text, lo, hi)
-        }
         return false
     }
 
