@@ -670,8 +670,12 @@ class TranslatorService : AccessibilityService() {
         lp.gravity = Gravity.TOP or Gravity.START
         lp.windowAnimations = R.style.NoAnim
         @Suppress("DEPRECATION")
-        lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED or
-            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        lp.softInputMode = if (mirror) {
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        } else {
+            // Same as the early version: the box gets the cursor and the keyboard immediately.
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+        }
 
         tp.view.measure(
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -727,8 +731,9 @@ class TranslatorService : AccessibilityService() {
             }
         } else {
             if (selection.isNotEmpty()) tp.prefill(selection, autoSubmit = false)
-            // Only ask for the keyboard if it is not already up; asking again is what makes it flicker.
-            if (!imeVisible()) main.postDelayed({ tp.showKeyboard() }, 150)
+            // Cursor into the box and keyboard up, so you can type right away.
+            main.post { tp.showKeyboard() }
+            main.postDelayed({ tp.showKeyboard() }, 120)
         }
     }
 
