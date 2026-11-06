@@ -112,8 +112,8 @@ class Prefs(context: Context) {
      * "box" = the panel window takes the keyboard (Android then switches it and may hide it for a moment).
      */
     var typingMode: String
-        get() = sp.getString("typing_mode3", "relay") ?: "relay"
-        set(v) { sp.edit().putString("typing_mode3", if (v == "box" || v == "field") v else "relay").apply() }
+        get() = sp.getString("typing_mode4", "box") ?: "box"
+        set(v) { sp.edit().putString("typing_mode4", if (v == "relay" || v == "field") v else "box").apply() }
 
     /** Tapping outside the panel closes it (the keyboard stays). */
     var closeOutside: Boolean

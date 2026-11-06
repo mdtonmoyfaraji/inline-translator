@@ -63,6 +63,15 @@ class TranslatorService : AccessibilityService() {
     private var awaitingRevert = false
     private var lastFieldText = ""
     private val boxText = StringBuilder()
+    // selected text support
+    private var lastSelStart = -1
+    private var lastSelEnd = -1
+    private var selSaved: Triple<String, Int, Int>? = null
+    private var selSavedTime = 0L
+    private var forcedSel: Triple<String, Int, Int>? = null
+    private var capBase: String? = null
+    private var capLo = 0
+    private var capHi = 0
     private val imeCheckTask = Runnable { checkImeStillThere() }
     private var target: AccessibilityNodeInfo? = null
     private var hidePending = false
@@ -119,6 +128,7 @@ class TranslatorService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         if (wantText) types = types or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        if (triggerOn) types = types or AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
         info.eventTypes = types
         info.notificationTimeout = if (wantText) 0 else 100 // no throttling, or fast double presses get lost
         serviceInfo = info
@@ -131,6 +141,12 @@ class TranslatorService : AccessibilityService() {
         if (event == null || prefs == null) return
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> handleTextChanged(event)
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
+                if (panelView == null) {
+                    lastSelStart = event.fromIndex
+                    lastSelEnd = event.toIndex
+                }
+            }
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
                 if (panelView != null) return // our own panel
                 if (event.packageName?.toString() == packageName && ProcessTextActivity.active) return
@@ -268,12 +284,43 @@ class TranslatorService : AccessibilityService() {
         if (!cfg.enabled) return
         val before = event.beforeText?.toString() ?: return
         val after = event.text?.firstOrNull()?.toString() ?: return
-        if (detector.onTextChanged(before, after, now) == Hit.COMPLETED) {
+        var hit = detector.onTextChanged(before, after, now)
+        if (hit == Hit.NONE) {
+            selSaved = null
+            // Text was selected and the first trigger press replaced it: remember the original text so it can be put back.
+            val s = lastSelStart
+            val e = lastSelEnd
+            if (isSelectionReplacedBy(before, after, s, e, cfg.char)) {
+                selSaved = Triple(before, s, e)
+                selSavedTime = now
+                hit = detector.press(now)
+            }
+        }
+        if (hit == Hit.COMPLETED) {
             val src = event.source ?: return
             if (!src.isEditable || src.isPassword) return
             target = src
-            eraseTrigger(src, cfg)
+            val saved = selSaved
+            selSaved = null
+            if (saved != null && now - selSavedTime <= cfg.maxIntervalMs.toLong() * cfg.pressCount) {
+                restoreText(src, saved.first, saved.second, saved.third)
+                forcedSel = saved
+            } else {
+                eraseTrigger(src, cfg)
+            }
             main.postDelayed({ openPanel() }, 80)
+        }
+    }
+
+    /** Puts the field back to [text] with [s, e) selected (the selection the trigger presses had replaced). */
+    private fun restoreText(node: AccessibilityNodeInfo, text: String, s: Int, e: Int) {
+        try {
+            if (!node.refresh()) return
+            ignoreEventsUntil = SystemClock.uptimeMillis() + 500
+            val args = Bundle()
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) setCursor(node, s, e)
+        } catch (ex: Exception) {
         }
     }
 
@@ -510,8 +557,24 @@ class TranslatorService : AccessibilityService() {
         val node = currentTarget() ?: return
         val mode = p.typingMode
         val mirror = mode != "box"
-        val selection = selectedTextOf(node)
-        val fieldText = fieldTextOf(node)
+        // The selection (if any) is captured now: the field may lose its selection when the panel takes focus.
+        val forced = forcedSel
+        forcedSel = null
+        val fieldText = forced?.first ?: fieldTextOf(node)
+        var selLo = -1
+        var selHi = -1
+        if (forced != null) {
+            selLo = forced.second
+            selHi = forced.third
+        } else if (!node.isShowingHintText) {
+            selLo = minOf(node.textSelectionStart, node.textSelectionEnd)
+            selHi = maxOf(node.textSelectionStart, node.textSelectionEnd)
+        }
+        val hasSel = selLo >= 0 && selHi > selLo && selHi <= fieldText.length
+        val selection = if (hasSel) fieldText.substring(selLo, selHi) else ""
+        capBase = if (hasSel) fieldText else null
+        capLo = if (hasSel) selLo else 0
+        capHi = if (hasSel) selHi else 0
         hideBubble()
 
         var dragStartX = 0
@@ -700,6 +763,7 @@ class TranslatorService : AccessibilityService() {
             }
         }
         main.removeCallbacks(imeCheckTask)
+        capBase = null
         panelFocusable = false
         if (mirrorActive) {
             mirrorActive = false
@@ -753,6 +817,12 @@ class TranslatorService : AccessibilityService() {
         if (node.isShowingHintText || start < 0 || end < 0) {
             start = base.length
             end = base.length
+        }
+        // Text was selected when the panel opened: the result replaces exactly that text.
+        val cb = capBase
+        if (cb != null && cb == base && capHi > capLo) {
+            start = capLo
+            end = capHi
         }
         val lo = minOf(start, end).coerceIn(0, base.length)
         val hi = maxOf(start, end).coerceIn(0, base.length)

@@ -124,6 +124,8 @@ class TriggerDetector(var cfg: TriggerConfig) {
         return Hit.NONE
     }
 
+    fun press(now: Long): Hit = register(now)
+
     private fun register(now: Long): Hit {
         if (now - last > cfg.maxIntervalMs) count = 0
         count += 1
@@ -154,4 +156,13 @@ object TextDiff {
         if (e.removed > 0) box.setLength((box.length - e.removed).coerceAtLeast(0))
         if (e.inserted.isNotEmpty()) box.append(e.inserted)
     }
+}
+
+/**
+ * True if the edit before -> after is "the selection [s, e) was replaced by the trigger character" -
+ * what happens when you select text and then type the first trigger press over it.
+ */
+fun isSelectionReplacedBy(before: String, after: String, s: Int, e: Int, c: String): Boolean {
+    if (c.isEmpty() || s < 0 || e <= s || e > before.length) return false
+    return after == before.substring(0, s) + c + before.substring(e)
 }

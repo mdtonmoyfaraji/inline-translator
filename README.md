@@ -9,7 +9,7 @@ Same features as the Chrome extension, as an Android app.
   Prompts are identical to the extension.
 - **Floating button** in any text field: drag it anywhere, it stays exactly where you drop it (no animation, never follows the keyboard).
 - **Panel**: drag it by the small bar at its top, it remembers its position. The result is inserted at the cursor (or replaces the selection).
-- **Keyboard stays open**: default typing mode types in the panel box while the keyboard stays bound to your message field (typed letters are picked up into the box, the field is put back at once). Alternatives: type in the field and the box mirrors it, or let the panel take the keyboard (Android hides it briefly then).
+- **Type in the panel box**: the cursor goes into the box and you write there. **Selected text** goes into the box when you tap the bubble or use the trigger key; the result replaces exactly that selection.
 - **Dropdowns toggle** (tap again to close); **tap outside to close** the panel (setting, keyboard stays).
 - **Trigger key**: set any key on your own keyboard (Space, a letter, punctuation, an emoji), 1–5 presses in a row, max. time between presses,
   built-in test field. The typed trigger characters are removed again and the panel opens.
