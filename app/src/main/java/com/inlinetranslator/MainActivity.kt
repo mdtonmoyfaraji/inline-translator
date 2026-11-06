@@ -756,6 +756,14 @@ class MainActivity : Activity() {
         }
         add(col, reset, 10)
 
+        add(col, toggleRow("Copy the result and show it at the bottom of the box", prefs.showResult) {
+            prefs.showResult = it
+        }, 6)
+        add(
+            col,
+            tv(this, "On: the result is inserted, copied to the clipboard and stays visible under the text box. Off: it is inserted and the box closes.", 12f, pal.muted),
+            0
+        )
         add(col, toggleRow("Close the panel when I tap outside of it", prefs.closeOutside) {
             prefs.closeOutside = it
         }, 6)

@@ -115,6 +115,11 @@ class Prefs(context: Context) {
         get() = sp.getString("typing_mode4", "box") ?: "box"
         set(v) { sp.edit().putString("typing_mode4", if (v == "relay" || v == "field") v else "box").apply() }
 
+    /** After a result: copy it to the clipboard and keep it visible at the bottom of the box. */
+    var showResult: Boolean
+        get() = sp.getBoolean("show_result", true)
+        set(v) { sp.edit().putBoolean("show_result", v).apply() }
+
     /** Tapping outside the panel closes it (the keyboard stays). */
     var closeOutside: Boolean
         get() = sp.getBoolean("close_outside", true)

@@ -477,6 +477,10 @@ class TranslatorPanel(
         resultScroll.visibility = View.VISIBLE
     }
 
+    private fun copyQuiet(text: String) {
+        ctx.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("translation", text))
+    }
+
     private fun copy(text: String) {
         val cm = ctx.getSystemService(ClipboardManager::class.java)
         cm?.setPrimaryClip(ClipData.newPlainText("translation", text))
@@ -527,7 +531,16 @@ class TranslatorPanel(
                     prefs.pushRecent(src)
                     prefs.pushToneRecent(tone)
                     setBusy(false)
-                    if (!host.deliver(o)) showResult(o, host.fallbackNote())
+                    val delivered = host.deliver(o)
+                    if (prefs.showResult) {
+                        copyQuiet(o)
+                        showResult(
+                            o,
+                            if (delivered) "Inserted. Also copied to the clipboard." else "Couldn\u2019t insert it. Copied to the clipboard."
+                        )
+                    } else if (!delivered) {
+                        showResult(o, host.fallbackNote())
+                    }
                 }
             }
         }.start()

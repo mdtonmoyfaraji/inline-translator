@@ -586,7 +586,7 @@ class TranslatorService : AccessibilityService() {
                     mirror -> replaceAllText(text)
                     else -> insertIntoTarget(text)
                 }
-                if (ok) main.post { closePanel() }
+                if (ok && !p.showResult) main.post { closePanel() }
                 return ok
             }
 
@@ -819,7 +819,13 @@ class TranslatorService : AccessibilityService() {
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
     }
 
-    /** Inserts at the cursor, or replaces the selection. Returns false if the app refuses. */
+    /**
+     * Inserts at the cursor, or replaces the selection. Returns false if the app refuses.
+     *
+     * The text the app reports for a field can be its placeholder ("Nachricht") and there is no reliable way to tell,
+     * so the field's text is NOT read and rebuilt. The result is pasted at the cursor / over the selection instead:
+     * that can only ever add the result.
+     */
     private fun insertIntoTarget(text: String): Boolean {
         val node = target ?: return false
         try {
@@ -829,30 +835,29 @@ class TranslatorService : AccessibilityService() {
         }
         if (!node.isEditable) return false
 
-        val raw = try { node.text?.toString() ?: "" } catch (e: Exception) { "" }
-        val base = fieldTextOf(node)
-        var start = node.textSelectionStart
-        var end = node.textSelectionEnd
-
+        var lo = node.textSelectionStart
+        var hi = node.textSelectionEnd
         // Text was selected when the panel opened: the result replaces exactly that text.
+        val raw = try { node.text?.toString() ?: "" } catch (e: Exception) { "" }
         val cb = capBase
-        if (cb != null && cb == base && capHi > capLo) {
-            return writeText(node, base.substring(0, capLo) + text + base.substring(capHi), capLo + text.length, text, capLo, capHi)
+        if (cb != null && capHi > capLo && cb == raw) {
+            lo = capLo
+            hi = capHi
         }
-
-        // Some apps report their placeholder ("Nachricht") as the field's text and do not say so. If the cursor
-        // info looks like "empty field with a hint", do not rebuild the text from what the app reports:
-        // insert at the cursor instead, so the placeholder can never end up in the result.
-        val unsure = raw.isNotEmpty() && !isPlaceholder(node, raw) && ((start == 0 && end == 0) || start < 0 || end < 0)
-        if (unsure) return insertViaPaste(node, text, start, end)
-
-        if (start < 0 || end < 0) {
-            start = base.length
-            end = base.length
+        if (lo >= 0 && hi >= 0) {
+            val a = minOf(lo, hi)
+            val b = maxOf(lo, hi)
+            lo = a
+            hi = b
         }
-        val lo = minOf(start, end).coerceIn(0, base.length)
-        val hi = maxOf(start, end).coerceIn(0, base.length)
-        return writeText(node, base.substring(0, lo) + text + base.substring(hi), lo + text.length, text, lo, hi)
+        if (insertViaPaste(node, text, lo, hi)) return true
+
+        // Paste refused. Rebuilding the text is only safe when the app clearly reports real text.
+        if (raw.isEmpty()) return writeText(node, text, text.length, text, 0, 0)
+        if (lo > 0 && hi > 0 && hi <= raw.length && !isPlaceholder(node, raw)) {
+            return writeText(node, raw.substring(0, lo) + text + raw.substring(hi), lo + text.length, text, lo, hi)
+        }
+        return false
     }
 
     /** "Type in the field" mode: the translation replaces everything in the field. */
